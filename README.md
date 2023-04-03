@@ -10,6 +10,7 @@ Improving assembly contiguity by using locally mapped reads to bridge gaps via D
 * Python2
 * GEM mapper and indexer. To get the required GEM binaries, run the following commands: 
 ```
+cd bin/
 wget -q -O - "https://downloads.sourceforge.net/project/gemlibrary/gem-library/Binary%20pre-release%203/GEM-binaries-Linux-x86_64-core_i3-20130406-045632.tbz2" | tar -jxv GEM-binaries-Linux-x86_64-core_i3-20130406-045632/bin/gem-mapper --strip-components 2
 wget -q -O - "https://downloads.sourceforge.net/project/gemlibrary/gem-library/Binary%20pre-release%203/GEM-binaries-Linux-x86_64-core_i3-20130406-045632.tbz2" | tar -jxv GEM-binaries-Linux-x86_64-core_i3-20130406-045632/bin/gem-indexer --strip-components 2
 ```
