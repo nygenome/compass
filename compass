@@ -1,0 +1,503 @@
+#!/usr/bin/env python 
+
+################################################################################
+### COPYRIGHT ##################################################################
+
+# New York Genome Center
+
+# SOFTWARE COPYRIGHT NOTICE AGREEMENT
+# This software and its documentation are copyright (2016) by the New York
+# Genome Center. All rights are reserved. This software is supplied without
+# any warranty or guaranteed support whatsoever. The New York Genome Center
+# cannot be responsible for its use, misuse, or functionality.
+
+# Version: 0.1
+# Author: Andre Corvelo & Jennifer Shelton
+
+################################################################# /COPYRIGHT ###
+################################################################################
+
+
+
+################################################################################
+### MODULES ####################################################################
+
+from optparse import OptionParser, OptionGroup
+import sys, os, errno, commands, uuid
+
+################################################################### /MODULES ###
+################################################################################
+
+
+
+################################################################################
+### FUNCTIONS ##################################################################
+
+def mkdir_p(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else: raise
+
+def rp(path,start):
+	return os.path.relpath(path, start)
+
+def bn(path):
+	return os.path.basename(path)
+
+def missing_files(csv_file_list):
+	return sum(not os.path.isfile(f) for f in csv_file_list.split(','))
+
+################################################################# /FUNCTIONS ###
+################################################################################
+
+
+
+################################################################################
+### ARGUMENTS,OPTIONS ##########################################################
+
+parser = OptionParser(usage = "\n%prog options", version = "%prog v0.2")
+
+# input
+parser_input = OptionGroup(parser, "Input (MANDATORY one of the following: -i, -f or (-1 and -2) and -g")
+
+parser_input.add_option(
+	"-i",
+	metavar = "STR",
+	type = "string",
+	dest = "i_comm",
+	default = None,
+	help = "Input command (use absolute paths!). Quoted, with interleaved FASTQ on STDOUT [Mandatory | -f | (-1 & -2)]"
+	)
+
+parser_input.add_option(
+	"-f",
+	metavar = "CSV_FILE_LIST",
+	type = "string",
+	dest = "i_fq",
+	default = None,
+	help = "Input .fq, .fastq, .fq.gz or .fastq.gz files. Interleaved [Mandatory | -i | (-1 & -2)]"
+	)
+
+parser_input.add_option(
+	"-1",
+	metavar = "CSV_FILE_LIST",
+	type = "string",
+	dest = "i_fq_1",
+	default = None,
+	help = "Input .fq, .fastq, .fq.gz, .fastq.gz read 1 file. In sync with, and of the same sort as, -2 input file [Mandatory | -i | -f]"
+	)
+
+parser_input.add_option(
+	"-2",
+	metavar = "CSV_FILE_LIST",
+	type = "string",
+	dest = "i_fq_2",
+	default = None,
+	help = "Input .fq, .fastq, .fq.gz, .fastq.gz read 2 file. In sync with, and of the same sort as, -1 input file [Mandatory | -i | -f]"
+	)
+
+parser_input.add_option(
+	"-g",
+	metavar = "FILE",
+	type = "string",
+	dest = "i_fasta",
+	default = None,
+	help = "Input genome FASTA file [Mandatory]"
+	)
+
+parser_input.add_option(
+	"-b",
+	metavar = "FILE",
+	type = "string",
+	dest = "i_bed",
+	default = None,
+	help = "Input target .bed file []"
+	)
+
+parser.add_option_group(parser_input)
+
+
+# targets
+parser_targets = OptionGroup(parser, "Target parameters")
+
+parser_targets.add_option(
+	"-s",
+	metavar = "INT",
+	type = "string",
+	dest = "t_sloplen",
+	default = '15',
+	help = "Target slop [15]"
+	)
+
+parser_targets.add_option(
+	"-a",
+	metavar = "INT",
+	type = "string",
+	dest = "t_anchorlen",
+	default = '100',
+	help = "Anchor length [100]"
+	)
+
+parser_targets.add_option(
+	"-m",
+	metavar = "INT",
+	type = "string",
+	dest = "t_fraglen",
+	default = '800',
+	help = "Maximum fragment length [800]"
+	)
+
+parser_targets.add_option(
+	"-l",
+	metavar = "STR",
+	type = "string",
+	dest = "t_libtype",
+	default = 'PE',
+	help = "Library type. PE or MP [PE]"
+	)
+
+parser_targets.add_option(
+	"--include-targets",
+	metavar = "FLAG",
+	dest = "t_incl",
+	action = 'store_true',
+	default = False,
+	help = "Include targets in probe [False]"
+	)
+
+
+parser.add_option_group(parser_targets)
+
+
+# Filling
+parser_fill = OptionGroup(parser, "Gap Filling")
+
+parser_fill.add_option(
+	"-e",
+	metavar = "FLOAT",
+	type = "string",
+	dest = "f_edits",
+	default = '0.02',
+	help = "Maximum mapping edit distance [0.02]"
+	)
+
+parser_fill.add_option(
+	"--unique-mapping",
+	metavar = "FLAG",
+	dest = "f_unique",
+	action = 'store_true',
+	default = False,
+	help = "Unique mapping reads only [False]"
+	)
+
+parser_fill.add_option(
+	"-k",
+	metavar = "CSV_INT_LIST",
+	type = "string",
+	dest = "f_kmers",
+	default = '91,81,71,61,51,41,31',
+	help = "K-mers. CSV ['91,81,71,61,51,41,31']"
+	)
+
+parser_fill.add_option(
+	"-c",
+	metavar = "INT",
+	type = "string",
+	dest = "f_mincov",
+	default = '2',
+	help = "Minimum coverage [2]"
+	)
+
+parser_fill.add_option(
+	"-v",
+	metavar = "FLOAT",
+	type = "string",
+	dest = "f_minfreq",
+	default = '0.4',
+	help = "Minimum frequency [0.4]"
+	)
+
+parser.add_option_group(parser_fill)
+
+# output and misc
+parser_misc = OptionGroup(parser, "Output and miscellaneous")
+
+parser_misc.add_option(
+	"-p",
+	metavar = "STR",
+	type = "string",
+	dest = "m_prefix",
+	default = str(uuid.uuid4())[:8],
+	help = "Sample prefix [random 8-char UUID]"
+	)
+
+parser_misc.add_option(
+	"-o",
+	metavar = "DIR",
+	type = "string",
+	dest = "m_outdir",
+	default = ".",
+	help = "Output directory ['.']"
+	)
+
+parser_misc.add_option(
+	"-t",
+	metavar = "INT",
+	type = "string",
+	dest = "m_threads",
+	default = "16",
+	help = "Number of threads [16]"
+	)
+
+parser_misc.add_option(
+	"-Q",
+	metavar = "QUEUE",
+	type = "string",
+	dest = "m_queue",
+	default = None,
+	help = "Cluster queue/partition []"
+	)
+
+parser_misc.add_option(
+	"-S",
+	metavar = "INT",
+	type = "string",
+	dest = "m_slots",
+	default = "16",
+	help = "Cluster slots [16]"
+	)
+
+parser_misc.add_option(
+	"--dry",
+	metavar = "FLAG",
+	dest = "m_dry",
+	action = 'store_true',
+	default = False,
+	help = "Dry run [False]"
+	)
+
+parser.add_option_group(parser_misc)
+
+(opt, args) = parser.parse_args()
+
+  
+######################################################### /ARGUMENTS,OPTIONS ###
+################################################################################
+
+
+
+################################################################################
+### CONSTANTS ##################################################################
+
+################################################################# /CONSTANTS ###
+################################################################################
+
+
+
+################################################################################
+### MAIN #######################################################################
+
+if __name__ == '__main__':
+	# base dirs
+	module_dir = os.path.abspath(os.path.dirname(__file__))
+	start_dir = os.getcwd()
+	
+	prefix = opt.m_prefix
+
+	run_dir = os.path.abspath(opt.m_outdir)	
+	mkdir_p(run_dir)
+
+	res_dir = run_dir + '/cmpss.' + prefix + '.base'
+	mkdir_p(res_dir)
+
+	log_dir = run_dir + '/cmpss.' + prefix + '.log'
+	mkdir_p(log_dir)
+
+	int_dir = run_dir + '/cmpss.' + prefix + '.intermediate'
+	mkdir_p(int_dir)
+
+	out_dir = run_dir + '/cmpss.' + prefix + '.out'
+	mkdir_p(out_dir)
+
+	# input
+	if opt.i_fq:
+		fq_files = [os.path.abspath(fq_file) for fq_file in opt.i_fq.split(',')]
+		fq_lnks = [res_dir + '/' + bn(fq_file) for fq_file in fq_files]
+		for x in xrange(len(fq_files)):
+			os.system(' '.join(['ln', '-s', fq_files[x], fq_lnks[x]]))
+	elif opt.i_fq_1 and opt.i_fq_2:
+		fq1_files = [os.path.abspath(fq1_file) for fq1_file in opt.i_fq_1.split(',')]
+		fq1_lnks = [res_dir + '/' + bn(fq1_file) for fq1_file in fq1_files]
+		for x in xrange(len(fq1_files)):
+			os.system(' '.join(['ln', '-s', fq1_files[x], fq1_lnks[x]]))
+		fq2_files = [os.path.abspath(fq2_file) for fq2_file in opt.i_fq_2.split(',')]
+		fq2_lnks = [res_dir + '/' + bn(fq2_file) for fq2_file in fq2_files]
+		for x in xrange(len(fq2_files)):
+			os.system(' '.join(['ln', '-s', fq2_files[x], fq2_lnks[x]]))
+	elif opt.i_comm:
+		comm_str = opt.i_comm
+		comm_file = open(res_dir + '/input_stream.sh', 'w')
+		comm_file.write('#!/bin/sh\n' + comm_str + ' > input_stream.fq\n')
+		comm_file.close()
+
+	if opt.i_fasta:
+		fasta_file = os.path.abspath(opt.i_fasta)
+		fasta_lnk = res_dir + '/' + bn(fasta_file)
+		fasta_base = '.'.join(fasta_lnk.split('.')[:-1])
+		os.system(' '.join(['ln', '-s', fasta_file, fasta_lnk]))
+		
+	if opt.i_bed:
+		bed_file = os.path.abspath(opt.i_bed)
+		bed_lnk = res_dir + '/' + bn(bed_file)
+		os.system(' '.join(['ln', '-s', bed_file, bed_lnk]))
+
+	# target parameters
+	sloplen = opt.t_sloplen
+	flanklen = opt.t_anchorlen
+	fraglen = opt.t_fraglen
+	libtype = opt.t_libtype
+	include_targets = opt.t_incl
+
+	# gap filling
+	editdist = opt.f_edits
+	unique_mapping = opt.f_unique
+	kmerlist = opt.f_kmers
+	mincov = opt.f_mincov
+	minfreq = opt.f_minfreq
+
+	# miscellaneous
+	threads = opt.m_threads
+	sge_queue = opt.m_queue
+	sge_slots = opt.m_slots
+	dry_run = opt.m_dry
+	
+	# other prefixes
+	inter_prefix = int_dir + '/' + prefix
+	out_prefix = out_dir + '/' + prefix
+
+	#sh script and pipe
+	sh_filename = run_dir + '/cmpss.' + prefix + '.sh'
+	pipe_filename = run_dir + '/cmpss.' + prefix + '.sge'
+	
+
+	###
+	sh_file = open(sh_filename, 'w')
+	sh_file.write('#!/bin/sh\n\n')
+	
+	sh_file.write('export PATH=' + module_dir + '/bin:$PATH ;\n\n')
+
+	commands = []
+	# indexer command
+	index_log = rp(log_dir + '/' + prefix + '.gem-indexer.log', run_dir)
+	index_cmdlist = ['gem-indexer', '-i', rp(fasta_lnk, run_dir), '-o', rp(inter_prefix, run_dir), '-T', threads, '&>>', index_log]
+	index_command = ' '.join(index_cmdlist) + ' ;\n\n'  
+	commands.append(index_command)
+	
+	# clean extra indexer log
+	clean_cmdlist = ['rm', '-f', rp(inter_prefix, run_dir) + '.log']
+	clean_command = ' '.join(clean_cmdlist) + ' ;\n\n' 
+	commands.append(clean_command)
+
+	# make probes command
+	probes_log = rp(log_dir + '/' + prefix + '.makeprobes.log', run_dir)
+	probes_cmdlist = ['makeprobes', '-i', rp(fasta_lnk, run_dir), '-s', sloplen, '-f', flanklen, '-l', fraglen, '-t', libtype, '-p', rp(inter_prefix, run_dir)]
+	if opt.i_bed:
+		probes_cmdlist += ['-b', rp(bed_lnk, run_dir)]
+	if include_targets:
+		probes_cmdlist += ['--include-targets']
+	probes_cmdlist += ['&>>', probes_log]
+	probes_command = ' '.join(probes_cmdlist) + ' ;\n\n'
+	commands.append(probes_command)
+
+	# input command
+	if opt.i_comm:
+		input_cmdlist= [comm_str]
+	elif opt.i_fq:
+		if opt.i_fq[-3:] == '.gz':
+			input_cmdlist = ['zcat'] + [rp(fq_lnk, run_dir) for fq_lnk in fq_lnks]
+		else:
+			input_cmdlist = ['cat'] + [rp(fq_lnk, run_dir) for fq_lnk in fq_lnks]
+	elif opt.i_fq_1 and opt.i_fq_2:
+		input_cmdlist = ['fqintlv', '-1', ','.join([rp(fq1_lnk, run_dir) for fq1_lnk in fq1_lnks]), '-2', ','.join([rp(fq2_lnk, run_dir) for fq2_lnk in fq2_lnks])]
+	input_command = ' '.join(input_cmdlist) + ' \\\n\t|'
+	commands.append(input_command)
+
+	# mapping
+	gem_log = rp(log_dir + '/' + prefix + '.gem-mapper.log', run_dir)
+	gem_cmdlist = ['gem-mapper', '-q', 'ignore', '--fast-mapping', '--mismatch-alphabet=ACTGN']
+	if unique_mapping:
+		gem_cmdlist += ['--unique-mapping']
+	gem_cmdlist += ['-m', editdist, '-I', rp(inter_prefix, run_dir) + '.gem', '-T', threads]
+	gem_cmdlist += ['2>>', gem_log]
+	gem_command = ' '.join(gem_cmdlist) + ' \\\n\t|' 
+	commands.append(gem_command)
+
+	# probe alignments
+	probe_cmdlist = ['parallel', '-c','"probealignments', '-b', rp(inter_prefix, run_dir) + '.prob.bedpe', '"', '-p', threads, '-i', '2', '-o', '1']
+	probe_command = ' '.join(probe_cmdlist) + ' \\\n\t|'
+	commands.append(probe_command)
+
+	# rm empty lines
+	rmel_command = 'awk \'$0!=""\'' +  ' \\\n\t|'
+	commands.append(rmel_command)
+
+	# unpack reads
+	unpack_command = 'unpackreads' + ' \\\n\t|'
+	commands.append(unpack_command)
+
+	# sort
+	sort_command = 'sort -k1,1 -S8G' +  ' \\\n\t|'
+	commands.append(sort_command)
+
+	# repack reads
+	repack_cmdlist = ['repackreads', '-b', rp(inter_prefix, run_dir) + '.feat.bedseq']
+	repack_command = ' '.join(repack_cmdlist) +  ' \\\n\t|'
+	commands.append(repack_command)
+
+	# print repacked reads
+	t_repack_cmdlist = ['tee', rp(inter_prefix, run_dir) + '.repack.bedseq.reads']
+	t_repack_command = ' '.join(t_repack_cmdlist) +  ' \\\n\t|'
+	commands.append(t_repack_command)
+	
+	# probe alignments
+	fill_cmdlist = ['parallel', '-c','"kfiller', '-k', kmerlist, '-c', mincov, '-f', minfreq + '"', '-p', threads, '-n', '2']
+	fill_command = ' '.join(fill_cmdlist) + ' \\\n\t|'
+	commands.append(fill_command)
+
+	# print swap bedseq
+	t_swap_cmdlist = ['tee', rp(inter_prefix, run_dir) + '.swap.bedseq']
+	t_swap_command = ' '.join(t_swap_cmdlist) +  ' \\\n\t|'
+	commands.append(t_swap_command)
+	
+	# resort
+	resort_command = 'sort -k1,1 -k2,2n' +  ' \\\n\t|'
+	commands.append(resort_command)
+	
+	# swap
+	swap_cmdlist = ['bedseq-swap', '-r', rp(fasta_lnk, run_dir), '2>', rp(out_prefix, run_dir) + '.cmpss.bed', '>', rp(out_prefix, run_dir) + '.cmpss.fa' ]
+	swap_command = ' '.join(swap_cmdlist) +  ' ;\n\n'
+	commands.append(swap_command)
+	
+
+	sh_file.write(''.join(commands))
+	sh_file.close()   
+	
+	if sge_queue:
+		pipe_file = open(pipe_filename, 'w')
+		pipe_file.write('\t'.join(['cmpss_' + prefix, sge_queue, '0', '-', sge_slots, '.', 'sh ' + rp(sh_filename, run_dir)]) + '\n')
+		pipe_file.close()
+		if not dry_run:
+			os.chdir(run_dir)
+			os.system(' '.join([module_dir + '/bin/sge', '-s', rp(pipe_filename, run_dir)]))
+			os.chdir(start_dir)
+	else:
+		if not dry_run:
+			os.chdir(run_dir)
+			os.system(' '.join(['sh', rp(sh_filename, run_dir)]))
+			os.chdir(start_dir)
+		
+###################################################################### /MAIN ###
+################################################################################

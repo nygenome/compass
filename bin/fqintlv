@@ -1,0 +1,99 @@
+#!/usr/bin/env python 
+
+################################################################################
+### COPYRIGHT ##################################################################
+
+# New York Genome Center
+
+# SOFTWARE COPYRIGHT NOTICE AGREEMENT
+# This software and its documentation are copyright (2016) by the New York
+# Genome Center. All rights are reserved. This software is supplied without
+# any warranty or guaranteed support whatsoever. The New York Genome Center
+# cannot be responsible for its use, misuse, or functionality.
+
+################################################################# /COPYRIGHT ###
+################################################################################
+
+
+
+################################################################################
+### MODULES ####################################################################
+
+from optparse import OptionParser
+from sys import stdin, stdout, stderr
+from subprocess import Popen, PIPE, STDOUT
+from itertools import islice
+
+################################################################### /MODULES ###
+################################################################################
+
+
+
+################################################################################
+### FUNCTIONS ##################################################################
+
+def p2o(ps):
+	while True:
+		r1 = [line for line in islice(ps[0].stdout, 4)]
+		if not r1:
+			break
+		r2 = [line for line in islice(ps[1].stdout, 4)]
+		stdout.write(''.join(r1+r2))
+			
+################################################################# /FUNCTIONS ###
+################################################################################
+
+
+
+################################################################################
+### ARGUMENTS,OPTIONS ##########################################################
+
+parser = OptionParser(usage = "\n%prog -1 reads.r1.fq -2 read.r2.fq", version = "%prog v0.2")
+
+parser.add_option(
+	"-1",
+	metavar = "FILE",
+	type = "string",
+	dest = "r1_files",
+	default = None,
+	help = "Read 1 filenames. CSVs (mandatory, .fq, .fastq, .fq.gz, .fastq.gz - all of the same type)"
+	)
+
+parser.add_option(
+	"-2",
+	metavar = "FILE",
+	type = "str",
+	dest = "r2_files",
+	default = None,
+	help = "Read 2 filenames. CSVs (mandatory, .fq, .fastq, .fq.gz, .fastq.gz - all of the same type)"
+	)
+
+(opt, args) = parser.parse_args()
+     
+######################################################### /ARGUMENTS,OPTIONS ###
+################################################################################
+
+
+
+################################################################################
+### CONSTANTS ##################################################################
+
+################################################################# /CONSTANTS ###
+################################################################################
+
+
+
+################################################################################
+### MAIN #######################################################################
+
+if __name__ == '__main__':
+	r1s = opt.r1_files.split(',')
+	r2s = opt.r2_files.split(',')
+	read_cmd = ['cat','zcat'][r1s[0][-3:]=='.gz']
+	ps = []
+	ps.append(Popen([read_cmd] + r1s, stdin=None, stdout=PIPE, shell=False))
+	ps.append(Popen([read_cmd] + r2s, stdin=None, stdout=PIPE, shell=False))	
+	p2o(ps)
+
+###################################################################### /MAIN ###
+################################################################################

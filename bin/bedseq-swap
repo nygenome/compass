@@ -1,0 +1,194 @@
+#!/usr/bin/env python 
+
+################################################################################
+### COPYRIGHT ##################################################################
+
+# New York Genome Center
+
+# SOFTWARE COPYRIGHT NOTICE AGREEMENT
+# This software and its documentation are copyright (2016) by the New York
+# Genome Center. All rights are reserved. This software is supplied without
+# any warranty or guaranteed support whatsoever. The New York Genome Center
+# cannot be responsible for its use, misuse, or functionality.
+
+################################################################# /COPYRIGHT ###
+################################################################################
+
+
+
+################################################################################
+### MODULES ####################################################################
+
+from optparse import OptionParser
+import sys 
+from itertools import islice
+
+################################################################### /MODULES ###
+################################################################################
+
+
+
+################################################################################
+### FUNCTIONS ##################################################################
+
+def wrap(sid, seq, dev, cpl=60):
+	dev.write('>' + sid + '\n')
+	for x in range(0, len(seq), cpl):
+		dev.write(seq[x:x+cpl] + '\n')
+
+def revcomp(seq, rcd):
+	return ''.join(rcd[c] for c in reversed(seq))
+
+def readfasta(filepath):
+	sid = None
+	if filepath == 'stdin':
+		fasta = sys.stdin
+	else:
+		fasta = open(filepath, 'r')
+	for line in fasta:
+		if line[0] == '>':
+			if sid:
+				yield(sid,desc,''.join(seq))
+			header = line.rstrip()[1:].split()
+			sid = header[0]
+			desc = ' '.join(header[1:])
+			seq = []
+		else:
+			seq.append(line.rstrip().upper())
+	if sid:
+		yield(sid,desc,''.join(seq))
+
+def readbedseq(filepath):
+	if filepath == 'stdin':
+		bedseq = sys.stdin
+	else:
+		bedseq = open(filepath, 'r')
+	for line in bedseq:
+		linearray = line.strip('\n').split('\t')
+		linearray[1] = int(linearray[1])
+		linearray[2] = int(linearray[2])
+		linearray[4] = int(linearray[4])
+		yield tuple(linearray)				
+	
+	
+def build(sid, poss, seqs, ref, new_ref):
+	new_ref[sid] = []
+
+	breaks = iter(poss[sid][:-1])
+	replcs = iter(seqs[sid])
+	while True:
+		coords = tuple(c for c in islice(breaks, 2))
+		if not coords:
+			break
+		r_seq = ref[sid][slice(*coords)]
+		new_ref[sid].append(r_seq)
+		
+		replc = replcs.next()
+		a_seq = replc[0]
+		a_strand = replc[1]
+		if a_strand == '-':
+			a_seq = revcomp(a_seq, rcd)
+		new_ref[sid].append(a_seq)
+
+	coords = (poss[sid][-1], len(ref[sid]))	
+	r_seq = ref[sid][slice(*coords)]
+	new_ref[sid].append(r_seq)
+
+################################################################# /FUNCTIONS ###
+################################################################################
+
+
+
+################################################################################
+### ARGUMENTS,OPTIONS ##########################################################
+
+parser = OptionParser(usage="\n%prog [options]", version="%prog 0.1")
+
+parser.add_option(
+	"-b",
+	metavar = "FILE",
+	type = "string",
+	dest = "bedseq",
+	default = 'stdin',
+	help = "Input .bedseq file [STDIN]"
+	)
+
+parser.add_option(
+	"-r",
+	metavar = "FILE",
+	type = "string",
+	dest = "ref_fasta",
+	default = 'stdin',
+	help = "Input reference FASTA filename [STDIN]"
+	)
+
+(opt, args) = parser.parse_args()
+        
+######################################################### /ARGUMENTS,OPTIONS ###
+################################################################################
+
+
+
+################################################################################
+### CONSTANTS ##################################################################
+
+rcd={'a':'t','t':'a','A':'T','T':'A',
+	'g':'c','c':'g','G':'C','C':'G',
+	'r':'y','y':'r','R':'Y','Y':'R',
+	'k':'m','m':'k','K':'M','M':'K',
+	'b':'v','v':'b','B':'V','V':'B',
+	'd':'h','h':'d','D':'H','H':'D',
+	's':'s','w':'w','S':'S','W':'W',
+	'.':'.','-':'-','n':'n','N':'N'}
+
+################################################################# /CONSTANTS ###
+################################################################################
+
+
+
+################################################################################
+### MAIN #######################################################################
+
+if __name__ == "__main__":
+	ref = {}
+	sids = []
+	for rec in readfasta(opt.ref_fasta):
+		sid, desc, seq = rec
+		ref[sid] = seq
+		sids.append(sid)
+
+	new_ref = {}
+	poss = {}
+	seqs = {}
+	sid0 = None
+	for rec in readbedseq(opt.bedseq):
+		sid, start, end, name, score, strand, seq = rec
+		if sid != sid0:
+			if sid0:
+				build(sid0, poss, seqs, ref, new_ref)
+			poss[sid] = [0]
+			seqs[sid] = []
+			offset = 0
+			sid0 = sid
+		
+		poss[sid] += [start, end]
+		seqs[sid].append((seq, strand))
+		diff = len(seq) - end + start
+
+		out_rec = [sid, str(start + offset), str(end + offset + diff), name, str(score), strand]
+		sys.stderr.write('\t'.join(out_rec) + '\n')
+		
+		offset += diff
+
+	if sid0:
+		build(sid0, poss, seqs, ref, new_ref)
+
+	
+	for sid in sids:
+		if sid in new_ref:
+			wrap(sid, ''.join(new_ref[sid]), sys.stdout)
+		else:
+			wrap(sid, ref[sid], sys.stdout)
+
+###################################################################### /MAIN ###
+################################################################################

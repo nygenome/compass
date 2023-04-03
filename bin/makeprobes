@@ -1,0 +1,290 @@
+#!/usr/bin/env python 
+
+################################################################################
+### COPYRIGHT ##################################################################
+
+# New York Genome Center
+
+# SOFTWARE COPYRIGHT NOTICE AGREEMENT
+# This software and its documentation are copyright (2016) by the New York
+# Genome Center. All rights are reserved. This software is supplied without
+# any warranty or guaranteed support whatsoever. The New York Genome Center
+# cannot be responsible for its use, misuse, or functionality.
+
+################################################################# /COPYRIGHT ###
+################################################################################
+
+
+
+################################################################################
+### MODULES ####################################################################
+
+from optparse import OptionParser
+import sys, re
+
+################################################################### /MODULES ###
+################################################################################
+
+
+
+################################################################################
+### FUNCTIONS ##################################################################
+
+def readfasta(filepath):
+	name = None
+	if filepath == 'stdin':
+		fasta = sys.stdin
+	else:
+		fasta = open(filepath, 'r')
+	for line in fasta:
+		if line[0] == '>':
+			if name:
+				yield(name,description,''.join(sequence))
+			header = line.rstrip()[1:].split()
+			name = header[0]
+			description = ' '.join(header[1:])
+			sequence = []
+		else:
+			sequence.append(line.rstrip().upper())
+	if filepath != 'stdin':
+		fasta.close()
+	if name:
+		yield(name,description,''.join(sequence))
+			
+def makefastadict(fasta):
+	fastadict = {}
+	for name, description, sequence in fasta:
+		fastadict[name] = (description, sequence)
+	return fastadict
+
+def makegapbed(fastadict, minsize=1, maxsize=None, zfactor=6):
+	gappattern = re.compile('n+', re.IGNORECASE)
+	gapindex = 0
+	for name in sorted(fastadict):
+		sequence = fastadict[name][1]
+		for gap in gappattern.finditer(sequence):
+			start, end =  gap.span()
+			gaplength = end - start
+			if gaplength >= minsize and (not maxsize or gaplength <= maxsize):
+				gapname = 'gap' + str(gapindex).zfill(zfactor)
+				yield (name, start, end, gapname, gaplength, '+')
+				gapindex += 1
+
+def readbed(filepath):
+	if filepath == 'stdin':
+		bedseq = sys.stdin
+	else:
+		bedseq = open(filepath, 'r')
+	for line in bedseq:
+		chrm, start, end, name, score, strand = line.rstrip().split('\t')
+		yield chrm, int(start), int(end), name, int(score), strand			
+
+def writepipe(instream, outstream, sep='\t'):
+	for record in instream:
+		outstream.write(sep.join(str(x) for x in record) + '\n')
+		yield record
+
+def slopbed(bed, ext):
+	for chrm, start, end, name, score, strand in bed:
+		start -= ext
+		end += ext
+		yield (chrm, start, end, name, score, strand)
+
+def prunebed(bed, fastadict):
+	fastalens = {}
+	for chrm in fastadict:
+		fastalens[chrm] = len(fastadict[chrm][1])
+	for chrm, start, end, name, score, strand in bed:
+		if start >= 0 and end <= fastalens[chrm]:
+			yield (chrm, start, end, name, score, strand)
+
+def mergebed(bed):
+	chrm0, start0, end0, name0, score0, strand0 = None, 0, 0, None, 0, None
+	for chrm, start, end, name, score, strand in bed:
+		if chrm != chrm0 or start >= end0:
+			if chrm0:
+				yield (chrm0, start0, end0, name0, score0, strand0)
+			chrm0, start0, end0, name0, score0, strand0 = chrm, start, end, name, score, strand
+		else:
+			end0 = end
+			name0 += ';' + name
+			score0 += score
+	if chrm0:
+		yield (chrm0, start0, end0, name0, score0, strand0)
+
+def rescorebed(bed, newscore):
+	for chrm, start, end, name, score, strand in bed:
+		yield (chrm, start, end, name, newscore, strand)
+
+def makebedseq(bed, fastadict):
+	for chrm, start, end, name, score, strand in bed:
+		sequence = fastadict[chrm][1][start:end]
+		yield (chrm, start, end, name, score, strand, sequence)
+
+def bedseq2bed(bedseq):
+	for chrm, start, end, name, score, strand, sequence in bedseq:
+		yield (chrm, start, end, name, score, strand)
+
+
+def probebedpe(bed, tlen, strands, incl_targets):
+	for chrm, start, end, name, score, strand in bed:
+		if incl_targets:
+			yield (chrm, start, end-tlen, chrm, start+tlen, end, name, score) + strands
+		else:
+			yield (chrm, start, start+tlen, chrm, end-tlen, end, name, score) + strands
+
+def trimbedpe(bedpe, fastadict):
+	fastalens = {}
+	for chrm in fastadict:
+		fastalens[chrm] = len(fastadict[chrm][1])
+	for chrm0, start0, end0, chrm1, start1, end1, name, score, strand0, strand1 in bedpe:
+		start0, start1 = max(start0, 0), max(start1, 0)
+		end0, end1 = min(end0, fastalens[chrm0]), min(end1, fastalens[chrm1])
+		yield chrm0, start0, end0, chrm1, start1, end1, name, score, strand0, strand1
+
+################################################################# /FUNCTIONS ###
+################################################################################
+
+
+
+################################################################################
+### ARGUMENTS,OPTIONS ##########################################################
+
+parser = OptionParser(usage="\n%prog [options]", version="%prog 0.1")
+
+parser.add_option(
+	"-i",
+	metavar = "FILE",
+	type = "string",
+	dest = "fasta",
+	default = 'stdin',
+	help = "Input FASTA filename [STDIN]"
+	)
+
+parser.add_option(
+	"-b",
+	metavar = "FILE",
+	type = "string",
+	dest = "bed",
+	default = None,
+	help = "Input BED filename [None]"
+	)
+
+parser.add_option(
+	"-s",
+	metavar = "INT",
+	type = "int",
+	dest = "slop",
+	default = 0,
+	help = "Feature slop [0]"
+	)
+
+parser.add_option(
+	"-f",
+	metavar = "INT",
+	type = "int",
+	dest = "flank",
+	default = 100,
+	help = "Flank length [100]"
+	)
+
+parser.add_option(
+	"-l",
+	metavar = "INT",
+	type = "int",
+	dest = "fraglen",
+	default = 600,
+	help = "Maximum fragment length [600]"
+	)
+
+parser.add_option(
+	"--include-targets",
+	metavar = "FLAG",
+	dest = "incl_targets",
+	action = 'store_true',
+	default = False,
+	help = "Include target in probe regions [False]"
+	)
+
+parser.add_option(
+	"-t",
+	metavar = "STR",
+	type = "string",
+	dest = "libtype",
+	default = 'PE',
+	help = "Library type. PE or MP [PE]"
+	)
+
+parser.add_option(
+	"-p",
+	metavar = "STR",
+	type = "string",
+	dest = "prefix",
+	default = None,
+	help = "Ouput prefix [MANDATORY]"
+	)
+
+(opt, args) = parser.parse_args()
+        
+######################################################### /ARGUMENTS,OPTIONS ###
+################################################################################
+
+
+
+################################################################################
+### CONSTANTS ##################################################################
+
+################################################################# /CONSTANTS ###
+################################################################################
+
+
+
+################################################################################
+### MAIN #######################################################################
+
+if __name__ == "__main__":
+	# set spans
+	target_slop =  opt.slop + opt.flank 
+	probe_length = max(opt.fraglen, opt.flank)
+	feature_slop = probe_length - opt.flank
+	probe_strands = (('+', '-'), ('-', '+'))[opt.libtype != 'PE']
+
+	# open output files
+	if not opt.bed:
+		gaps_file = open(opt.prefix + '.gaps.bed', 'w')
+	features_file = open(opt.prefix + '.feat.bedseq', 'w')
+	probes_file = open(opt.prefix + '.prob.bedpe', 'w')
+
+	# read FASTA
+	fastareader = readfasta(opt.fasta)
+	fastadict = makefastadict(fastareader)
+
+	# initialize generators
+	if not opt.bed:
+		targets = writepipe(makegapbed(fastadict), gaps_file)
+	else:
+		targets = readbed(opt.bed)
+	
+	slopped_targets = slopbed(targets, target_slop)	
+	pruned_targets = prunebed(slopped_targets, fastadict)
+	merged_targets = mergebed(pruned_targets)
+	rescored_targets = rescorebed(merged_targets, opt.flank)	
+
+	features_seq = writepipe(makebedseq(rescored_targets, fastadict), features_file)
+	features = bedseq2bed(features_seq)
+	slopped_features = slopbed(features, feature_slop)
+	
+	probes = probebedpe(slopped_features, probe_length, probe_strands, opt.incl_targets)
+	trimmed_probes = writepipe(trimbedpe(probes, fastadict), probes_file)
+	
+	# run
+	for probepair in trimmed_probes:
+		pass
+
+	# close output files
+	gaps_file.close()
+	features_file.close()
+	probes_file.close()
+		
+###################################################################### /MAIN ###
+################################################################################

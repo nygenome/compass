@@ -1,0 +1,177 @@
+#!/usr/bin/env python 
+
+################################################################################
+### COPYRIGHT ##################################################################
+
+# New York Genome Center
+
+# SOFTWARE COPYRIGHT NOTICE AGREEMENT
+# This software and its documentation are copyright (2016) by the New York
+# Genome Center. All rights are reserved. This software is supplied without
+# any warranty or guaranteed support whatsoever. The New York Genome Center
+# cannot be responsible for its use, misuse, or functionality.
+
+################################################################# /COPYRIGHT ###
+################################################################################
+
+
+
+################################################################################
+### MODULES ####################################################################
+
+from optparse import OptionParser
+from itertools import islice, chain
+from re import findall
+from bisect import bisect
+import sys
+
+################################################################### /MODULES ###
+################################################################################
+
+
+
+################################################################################
+### FUNCTIONS ##################################################################
+
+def readbedpe(filepath):
+	if filepath == 'stdin':
+		bedpe = sys.stdin
+	else:
+		bedpe = open(filepath, 'r')
+	for line in bedpe:
+		chrm0, start0, end0, chrm1, start1, end1, name, score, strand0, strand1 = line.rstrip().split('\t')
+		yield chrm0, int(start0), int(end0), chrm1, int(start1), int(end1), name, int(score), strand0, strand1
+
+def bedpe2bed(bedpe):
+	for chrm0, start0, end0, chrm1, start1, end1, name, score, strand0, strand1 in bedpe:
+		yield (chrm0, start0, end0, name, score, strand0)
+		yield (chrm1, start1, end1, name, score, strand1)
+
+def loadprobes(bed):
+	starts, ends, featids = {}, {}, {}
+	for chrm, start, end, name, score, strand in bed:
+		if chrm not in featids:
+			featids[chrm] =  {'+':[], '-':[]}
+			starts[chrm] = {'+':[], '-':[]}
+			ends[chrm] = {'+':[], '-':[]}
+		featids[chrm][strand].append(name)
+		starts[chrm][strand].append(start)
+		ends[chrm][strand].append(end)
+	for chrm in ends:
+		ends[chrm]['+'].sort()
+		ends[chrm]['-'].sort()
+	return starts, ends, featids
+
+def readmap(filepath):
+	if filepath != 'stdin':
+		mapfile = open(filepath, 'r')
+	else:
+		mapfile = sys.stdin
+	while True:
+		p = [line.rstrip().split('\t') for line in islice(mapfile, 2)]
+		if not p:
+			break
+		yield (i for s in p for i in s)
+
+def nbesthits(strata):
+	return next((x for i, x in enumerate((int(h) for h in strata.split(':') if h != '!')) if x), 0)
+	
+def reflength(matchstring):
+	return sum([int(s) for s in findall(r'\d+(?!\-)', matchstring)]) + len(findall(r'[A-z]', matchstring))
+
+def getbesthits(strata, aligns):
+	for chrm, strand, start, matchstring in (hit.split(':') for hit in aligns.split(',')[:nbesthits(strata)]):
+		start = int(start) -1
+		end = start + reflength(matchstring)
+		yield chrm, strand, start, end
+
+def getfeatids(besthits, starts, ends, featids):
+	for chrm, strand, start, end  in besthits:
+		if chrm in featids:
+			slice_start = bisect(ends[chrm][strand], end - 1)
+			slice_end = bisect(starts[chrm][strand], start)
+			for featid in featids[chrm][strand][slice_start:slice_end]:
+				yield featid
+
+def getprobereads(maps, starts, ends, featids):
+	for rid0, seq0, qual0, strata0, aligns0, rid1, seq1, qual1, strata1, aligns1 in maps:
+		besthits0 = getbesthits(strata0, aligns0)
+		besthits1 = getbesthits(strata1, aligns1)
+		featids0 = getfeatids(besthits0, starts, ends, featids)
+		featids1 = getfeatids(besthits1, starts, ends, featids)
+		joint_featids = set(chain(featids0, featids1))
+		yield '|'.join(joint_featids), rid0, seq0, qual0, rid1, seq1, qual1
+
+################################################################# /FUNCTIONS ###
+################################################################################
+
+
+
+################################################################################
+### ARGUMENTS,OPTIONS ##########################################################
+
+parser = OptionParser(usage="\n%prog [options]", version="%prog 0.1")
+
+parser.add_option(
+	"-i",
+	metavar = "FILE",
+	type = "string",
+	dest = "mapfile",
+	default = 'stdin',
+	help = "Input GEM alignment filename [STDIN]"
+	)
+
+parser.add_option(
+	"-b",
+	metavar = "FILE",
+	type = "string",
+	dest = "bedpe",
+	default = None,
+	help = "Input probe BEDPE filename [MANDATORY]"
+	)
+
+parser.add_option(
+	"-p",
+	metavar = "STR",
+	type = "string",
+	dest = "prefix",
+	default = None,
+	help = "Ouput prefix [MANDATORY]"
+	)
+
+(opt, args) = parser.parse_args()
+        
+######################################################### /ARGUMENTS,OPTIONS ###
+################################################################################
+
+
+
+################################################################################
+### CONSTANTS ##################################################################
+
+################################################################# /CONSTANTS ###
+################################################################################
+
+
+
+################################################################################
+### MAIN #######################################################################
+
+if __name__ == "__main__":
+	# load probes
+	probes_bedpe = readbedpe(opt.bedpe)
+	probes = bedpe2bed(probes_bedpe)
+	starts, ends, featids = loadprobes(probes)
+
+	# initialize generators
+	maps = readmap(opt.mapfile)
+	probereads = getprobereads(maps, starts, ends, featids)
+	
+	# run
+	for featids, rid0, seq0, qual0, rid1, seq1, qual1 in probereads:
+		if featids:
+			sys.stdout.write('\t'.join((featids, rid0, seq0, qual0, rid1, seq1, qual1)))
+		sys.stdout.write('\n')
+
+###################################################################### /MAIN ###
+################################################################################

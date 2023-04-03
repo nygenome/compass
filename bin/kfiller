@@ -1,0 +1,278 @@
+#!/usr/bin/python 
+
+################################################################################
+### COPYRIGHT ##################################################################
+
+# New York Genome Center
+
+# SOFTWARE COPYRIGHT NOTICE AGREEMENT
+# This software and its documentation are copyright (2016) by the New York
+# Genome Center. All rights are reserved. This software is supplied without
+# any warranty or guaranteed support whatsoever. The New York Genome Center
+# cannot be responsible for its use, misuse, or functionality.
+
+################################################################# /COPYRIGHT ###
+################################################################################
+
+
+
+################################################################################
+### MODULES ####################################################################
+
+import sys
+from optparse import OptionParser
+from itertools import chain
+from math import sqrt
+
+################################################################### /MODULES ###
+################################################################################
+
+
+
+
+################################################################################
+### FUNCTIONS ##################################################################
+
+def revcomp(seq,rcd):
+	return ''.join(rcd[c] for c in reversed(seq))
+
+def kmers(seq, k):
+	l = len(seq)
+	for i in xrange(l-(k-1)):
+		yield seq[i:i+k]
+
+def read_input(filepath):
+	if filepath == 'stdin':
+		input_file = sys.stdin
+	else:
+		input_file = open(filepath, 'r')
+	for line in input_file:
+		yield line.rstrip().split('\t')
+	if filepath != 'stdin':
+		input_file.close()
+
+def makekmercounts(reads, k, rcd):
+	rseqs = (read for read in reads.split('|'))
+	kmercounts = {}
+	conncounts = {}
+	for rseq in rseqs:
+		for seq in (rseq, revcomp(rseq, rcd)):
+			pkmer = None
+			for kmer in kmers(seq, k):
+				prefix =  kmer[:-1]
+				extension = kmer[-1]
+				if prefix not in kmercounts:
+					kmercounts[prefix] = {'A':0, 'C':0, 'G':0, 'T':0, 'N':0}
+				kmercounts[prefix][extension] += 1
+				if pkmer:
+					connkmer = pkmer + extension
+					if connkmer not in conncounts:
+						conncounts[connkmer] = 0
+					conncounts[connkmer] += 1
+				pkmer = kmer
+	return kmercounts, conncounts
+
+def filtercounts(kmercounts, c, f):
+	for prefix in kmercounts:
+		prefix_cov  = float(sum(kmercounts[prefix].values()))
+		dellist = []
+		for extension in kmercounts[prefix]:
+			if kmercounts[prefix][extension] / prefix_cov < f or kmercounts[prefix][extension] < c:
+				dellist.append(extension)
+		for extension in dellist:
+			del kmercounts[prefix][extension]
+
+def addflankkmers(kmercounts, conncounts, k, lflank, rflank):
+	for seq in (lflank, revcomp(lflank, rcd), rflank, revcomp(rflank, rcd)):
+		pkmer = None
+		for kmer in kmers(seq, k):
+			prefix =  kmer[:-1]
+			extension = kmer[-1]
+			if prefix not in kmercounts:
+				kmercounts[prefix] = {}
+			if extension not in kmercounts[prefix]:
+				kmercounts[prefix][extension] = 0 
+			if pkmer:
+				connkmer = pkmer + extension
+				if connkmer not in conncounts:
+					conncounts[connkmer] = 1
+			pkmer = kmer
+
+def buildgraph(kmercounts):
+	graph = {}
+	for prefix in kmercounts:
+		for extension in kmercounts[prefix]:
+			kmer = prefix + extension
+			sufix = kmer[1:]
+			if kmer not in graph:
+				graph[kmer] = set()
+			if sufix in kmercounts:
+				for extension2 in kmercounts[sufix]:
+					graph[kmer].add(sufix+extension2)
+	return graph
+
+def getpaths(graph, source, sink, reverse=False, rcd=None):
+    queue = [(source, [source])]
+    while queue:
+        vertex, path0 = queue.pop(0)
+        for kmer in graph[vertex] - set(path0):
+			path = path0 + [kmer]
+			if kmer == sink:
+				if reverse:
+					yield tuple(revcomp(k, rcd) for k in reversed(path))
+				else:
+					yield tuple(path)
+			else:
+				queue.append((kmer, path))
+
+def uniquepaths(paths):
+	seen = set()
+	for path in paths:
+		if path not in seen:
+			yield path
+			seen.add(path)
+
+def scorepaths(paths, conncounts):
+	for path in paths:
+		pathseq = path[0] + ''.join(kmer[-1] for kmer in path[1:])
+		pathconnkmers = (path[i-1]+path[i][-1] for i in xrange(1,len(path)))
+		pathconns = [conncounts[connkmer] if connkmer in conncounts else 0 for connkmer in pathconnkmers]
+		pathlen = len(pathconns)
+		pathmin = min(pathconns)
+		pathmax = max(pathconns)
+		pathmean = sum(pathconns) / float(pathlen)
+		pathsd = sqrt(sum((c - pathmean) ** 2 for c in pathconns) / pathlen)
+		yield (pathseq, pathlen, pathmin, pathmax, pathmean, pathsd)
+		
+def selectpath(paths):
+	pathseq = None
+	pathlist = []
+	for path in paths:
+		if path[2]:
+			pathlist.append(path)
+	if pathlist:
+		pathsorted = sorted(pathlist, key=lambda path: path[4])
+		pathseq = pathsorted[-1][0]
+	return pathseq
+
+################################################################# /FUNCTIONS ###
+################################################################################
+
+
+
+
+################################################################################
+### ARGUMENTS,OPTIONS ##########################################################
+
+parser = OptionParser(usage = "\n%prog [options]", version="%prog 0.1")
+
+parser.add_option(
+	"-i",
+	metavar = "FILE",
+	type = "string",
+	dest = "onel_file",
+	default = 'stdin',
+	help = "input FASTA filename (default = 'stdin')"
+	)
+
+parser.add_option(
+	"-k",
+	metavar = "INT_LIST",
+	type = "string",
+	dest = "k_size",
+	default = '31',
+	help = "K-mer sizes. CSV list (default = 31)"
+	)
+
+parser.add_option(
+	"-c",
+	metavar = "INT",
+	type = "int",
+	dest = "min_cov",
+	default = 2,
+	help = "Minimum coverage.(default = 2)"
+	)
+
+parser.add_option(
+	"-f",
+	metavar = "FLOAT",
+	type = "float",
+	dest = "min_frq",
+	default = 0.4,
+	help = "Minimum frequency.(default = 0.4)"
+	)
+
+(opt, args) = parser.parse_args()
+
+######################################################### /ARGUMENTS,OPTIONS ###
+################################################################################
+
+
+
+
+################################################################################
+### CONSTANTS ##################################################################
+
+rcd={'a':'t','t':'a','A':'T','T':'A',
+	'g':'c','c':'g','G':'C','C':'G',
+	'r':'y','y':'r','R':'Y','Y':'R',
+	'k':'m','m':'k','K':'M','M':'K',
+	'b':'v','v':'b','B':'V','V':'B',
+	'd':'h','h':'d','D':'H','H':'D',
+	's':'s','w':'w','S':'S','W':'W',
+	'.':'.','-':'-','n':'n','N':'N'}
+
+################################################################# /CONSTANTS ###
+################################################################################
+
+
+
+
+################################################################################
+### MAIN #######################################################################
+			
+if __name__ == "__main__":
+	k_list = [int(v) for v in opt.k_size.split(',')]
+
+	for record in read_input(opt.onel_file):
+		chrm, start, end, name, fsize, strand, feature, reads, quals = record
+		
+		lflank = feature[:int(fsize)]  
+		rflank = feature[-int(fsize):]
+		
+		swapseq = feature
+		score = '0'
+
+		if len(reads.split('|')) > 3000:
+			sys.stdout.write('\t'.join([chrm, start, end, name, score, strand, swapseq]) + '\n')
+			continue
+
+		for k in k_list:
+			source = lflank[:k]
+			sink = rflank[-k:]
+			revsource = revcomp(sink, rcd)
+			revsink = revcomp(source, rcd)
+			
+			kmercounts, conncounts = makekmercounts(reads, k, rcd)
+
+			filtercounts(kmercounts, opt.min_cov, opt.min_frq)
+			addflankkmers(kmercounts, conncounts, k, lflank, rflank)
+
+			graph = buildgraph(kmercounts)
+
+			fwdpaths = getpaths(graph, source, sink)
+			revpaths = getpaths(graph, revsource, revsink, reverse=True, rcd=rcd)
+			paths = uniquepaths(chain(fwdpaths, revpaths))
+
+			paths_scored = scorepaths(paths, conncounts)
+			pathseq = selectpath(paths_scored)
+			
+			if pathseq:
+				swapseq = pathseq
+				score = str(k)
+				break
+		
+		sys.stdout.write('\t'.join([chrm, start, end, name, score, strand, swapseq]) + '\n')
+
+###################################################################### /MAIN ###
+################################################################################
